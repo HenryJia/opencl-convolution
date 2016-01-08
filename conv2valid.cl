@@ -16,7 +16,7 @@ void conv2ValidGPU(const float* in, const float* filter, float* out, int M, int 
 */
 
 // For Row Major
-#define IDX2R(i,j,ld) (i * ld + j) // i is column, j is row, ld is total number of columns
+#define IDX2R(i,j,ld) (i * ld + j) // i is row, j is column, ld is total number of columns
 
 #define GROUP_SIZE 32
 
@@ -39,9 +39,9 @@ __kernel void conv2_valid(__global float* in, __global float* filter, __global f
     __local float dl_filter[GROUP_SIZE][GROUP_SIZE];
 
     if(row < M && col < N) {
-        dl_in[ty][tx] = in[IDX2R(row, col, M)];
+        dl_in[ty][tx] = in[IDX2R(row, col, N)];
         if(ty < filterM && tx < filterN)
-            dl_filter[ty][tx] = filter[IDX2R(ty, tx, filterM)];
+            dl_filter[ty][tx] = filter[IDX2R(ty, tx, filterN)];
     } else
         dl_in[ty][tx] = 0.0;
 
@@ -51,7 +51,7 @@ __kernel void conv2_valid(__global float* in, __global float* filter, __global f
         for(int i = 0; i < filterM; i++)
             for(int j = 0; j < filterN; j++)
                 CValue += dl_in[ty + i][tx + j] * dl_filter[i][j];
-        out[IDX2R(row, col, outM)] = CValue;
+        out[IDX2R(row, col, outN)] = CValue;
     }
 }
 
