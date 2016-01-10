@@ -9,10 +9,10 @@
 
 #include "cl_get_error.hpp"
 
-#define GROUP_SIZE 32
+#define GROUP_SIZE 8
 
 int image_dim = 32;
-int filter_dim = 8;
+int filter_dim = 4;
 int out_dim = image_dim - filter_dim + 1;
 
 // For loading the OpenCL kernel code
@@ -53,6 +53,8 @@ int main(int argc, char **argv) {
     std::cout << "Source Printed\n";*/
 
     // Setup OpenCL and compile the kernel
+    cl_uint platformCount;            // OpenCL platform count
+    cl_platform_id* cl_plats;          // OpenCL platform
     cl_platform_id cl_plat;           // OpenCL platform
     cl_device_id cl_dev;              // device ID
     cl_context cl_ctx;                // context
@@ -62,11 +64,16 @@ int main(int argc, char **argv) {
 
     cl_int cl_err = CL_SUCCESS;
 
-    cl_err = clGetPlatformIDs(1, &cl_plat, NULL);
+    clGetPlatformIDs(0, NULL, &platformCount);
+    printf("Platform Count %i\n", platformCount);
+    cl_plats = (cl_platform_id*) malloc(sizeof(cl_platform_id) * platformCount);
+
+    cl_err = clGetPlatformIDs(platformCount, cl_plats, NULL);
+    cl_plat = cl_plats[1]; // The CPU instead of the GPU
     if (cl_err != CL_SUCCESS)
         std::cerr << "clGetPlatformIDs failed: " << cl_get_error(cl_err) << std::endl;
 
-    cl_err = clGetDeviceIDs(cl_plat, CL_DEVICE_TYPE_GPU, 1, &cl_dev, NULL);
+    cl_err = clGetDeviceIDs(cl_plat, CL_DEVICE_TYPE_ALL, 1, &cl_dev, NULL);
     if (cl_err != CL_SUCCESS)
         std::cerr << "clGetDeviceIDs failed: " << cl_get_error(cl_err) << std::endl;
 
@@ -83,7 +90,7 @@ int main(int argc, char **argv) {
     if (cl_err != CL_SUCCESS)
         std::cerr << "clCreateProgramWithSource failed: " << cl_get_error(cl_err) << std::endl;
 
-    cl_err = clBuildProgram(conv2_valid, 0, NULL, "-Dfilter_dim=5", NULL, NULL);
+    cl_err = clBuildProgram(conv2_valid, 1, &cl_dev, "-Dimg_dim=32 -Dfilter_dim=4 -Dout_dim=29 -cl-mad-enable", NULL, NULL);
     if (cl_err != CL_SUCCESS)
         std::cerr << "clBuildProgram failed: " << cl_get_error(cl_err) << std::endl;
 
@@ -147,17 +154,22 @@ int main(int argc, char **argv) {
     if (cl_err != CL_SUCCESS)
         std::cerr << "cl_set_kernel_args failed: " << cl_get_error(cl_err) << std::endl;
 
-    size_t global_size[] = {((out_dim - 1) / o_group_dim + 1) * GROUP_SIZE, ((out_dim - 1) / o_group_dim + 1) * GROUP_SIZE};
-    size_t group_size[] = {GROUP_SIZE, GROUP_SIZE};
+    //size_t global_size[] = {((out_dim - 1) / o_group_dim + 1) * GROUP_SIZE, ((out_dim - 1) / o_group_dim + 1) * GROUP_SIZE};
+    //size_t group_size[] = {GROUP_SIZE, GROUP_SIZE};
     // Execute the kernel
     // Warm it up first
+    size_t global_size[] = {out_dim, out_dim};
+    //size_t global_size[] = {1, 1};
+    size_t group_size[] = {1, 1};
     cl_err = clEnqueueNDRangeKernel(cl_queue, conv2_valid_kernel, 2, NULL, global_size, group_size, 0, NULL, NULL);
+    //cl_err = clEnqueueNDRangeKernel(cl_queue, conv2_valid_kernel, 2, NULL, global_size, NULL, 0, NULL, NULL);
     clFinish(cl_queue);
     cl_event event;
 
     double total_time = 0;
-    for (int i = 0; i < 1000; i++) {
-        cl_err = clEnqueueNDRangeKernel(cl_queue, conv2_valid_kernel, 2, NULL, global_size, group_size, 0, NULL, &event);
+    for (int i = 0; i < 100000; i++) {
+        //cl_err = clEnqueueNDRangeKernel(cl_queue, conv2_valid_kernel, 2, NULL, global_size, group_size, 0, NULL, NULL);
+        cl_err = clEnqueueNDRangeKernel(cl_queue, conv2_valid_kernel, 2, NULL, global_size, NULL, 0, NULL, &event);
         clWaitForEvents(1 , &event);
         if (cl_err != CL_SUCCESS)
             std::cerr << "clEnqueueNDRangeKernel failed: " << cl_get_error(cl_err) << std::endl;
@@ -167,7 +179,7 @@ int main(int argc, char **argv) {
         clGetEventProfilingInfo(event, CL_PROFILING_COMMAND_END, sizeof(time_end), &time_end, NULL);
         total_time += time_end - time_start;
     }
-    std::cout << "Execution time in microseconds = " << (total_time / 1000 / 1.0e3) << " us" << std::endl;
+    std::cout << "Execution time in microseconds = " << (total_time / 100000 / 1.0e3) << " us" << std::endl;
 
     clFinish(cl_queue);
     cl_err = clEnqueueReadBuffer(cl_queue, d_output, CL_TRUE, 0, out_size, output_device.data(), 0, NULL, NULL );
@@ -175,6 +187,7 @@ int main(int argc, char **argv) {
         std::cerr << "clEnqueueWriteBuffer d_filter failed: " << cl_get_error(cl_err) << std::endl;
 
     // CPU convolution
+    auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < out_dim; i++) {
         for (int j = 0; j < out_dim; j++){
             float CValue = 0;
@@ -184,7 +197,10 @@ int main(int argc, char **argv) {
             output_host[i * out_dim + j] = CValue;
         }
     }
+    auto end = std::chrono::steady_clock::now();
+    auto elapsed = end - start;
 
+    std::cout << std::chrono::duration <double, std::micro> (elapsed).count() << " us" << std::endl;
     // Display the first 5 rows and columns to check the OpenCL kernel is working correctly.
     /*std::cout << std::endl;
     for (int i = 0; i < 5; i++) {
@@ -198,7 +214,8 @@ int main(int argc, char **argv) {
         for (int j = 0; j < 5; j++)
             std::cout << output_host[i * out_dim + j] << '\t';
         std::cout << std::endl;
-    }*/
+    }
+    */
 
     float diff = 0;
     for (int i = 0; i < out_dim * out_dim; i++)
